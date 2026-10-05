@@ -1,4 +1,4 @@
-import mongoose, { Schema, Types } from 'mongoose';
+import mongoose, { Model, Schema, Types } from 'mongoose';
 
 export interface User {
   username: string;
@@ -8,7 +8,7 @@ export interface User {
   createdAt: Date;
 }
 
-const userSchema = new Schema<User>(
+const userSchema: Schema<User> = new Schema(
   {
     username: { type: String, required: true, unique: true, trim: true },
     name: { type: String, required: true, trim: true },
@@ -18,4 +18,4 @@ const userSchema = new Schema<User>(
   { timestamps: true },
 );
 
-export const UserModel = mongoose.model<User>('User', userSchema);
+export const UserModel: Model<User> = mongoose.model('User', userSchema);
