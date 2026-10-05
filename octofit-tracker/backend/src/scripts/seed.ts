@@ -8,7 +8,8 @@ import { WorkoutModel } from '../models/workout.js';
 const connectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/octofit_db';
 
 /**
- * Seed the octofit_db database with test data
+ * Seed the octofit_db database with test data.
+ * Run this seed command with `npm run seed`.
  */
 async function seedDatabase() {
   try {
@@ -16,18 +17,26 @@ async function seedDatabase() {
 
     console.log('Connected to octofit_db');
 
-    const teams = await Promise.all([
-      TeamModel.findOneAndUpdate(
-        { name: 'Trail Blazers' },
-        { $set: { description: 'A team focused on outdoor miles.', members: [] } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-      ).exec(),
-      TeamModel.findOneAndUpdate(
-        { name: 'Peak Performers' },
-        { $set: { description: 'Building strength and consistency together.', members: [] } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-      ).exec(),
-    ]);
+    const team = TeamModel;
+    const user = UserModel;
+    const activity = ActivityModel;
+    const leaderboard = LeaderboardModel;
+    const workout = WorkoutModel;
+
+    const teamSeeds = [
+      { name: 'Trail Blazers', description: 'A team focused on outdoor miles.' },
+      { name: 'Peak Performers', description: 'Building strength and consistency together.' },
+    ];
+    const teams = await Promise.all(
+      teamSeeds.map(async (seed) => {
+        const existingTeam = await team.findOne({ name: seed.name }).exec();
+        if (existingTeam) {
+          existingTeam.set({ ...seed, members: [] });
+          return existingTeam.save();
+        }
+        return team.create({ ...seed, members: [] });
+      }),
+    );
 
     const userSeeds = [
       { username: 'alex-morgan', name: 'Alex Morgan', email: 'alex.morgan@example.com', team: teams[0]._id, points: 480 },
@@ -36,40 +45,44 @@ async function seedDatabase() {
       { username: 'taylor-kim', name: 'Taylor Kim', email: 'taylor.kim@example.com', team: teams[1]._id, points: 365 },
     ];
     const users = await Promise.all(
-      userSeeds.map(({ username, name, email, team }) =>
-        UserModel.findOneAndUpdate(
-          { username },
-          { $set: { name, email, team } },
-          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-        ).exec(),
-      ),
+      userSeeds.map(async ({ points: _points, ...seed }) => {
+        const existingUser = await user.findOne({ username: seed.username }).exec();
+        if (existingUser) {
+          existingUser.set(seed);
+          return existingUser.save();
+        }
+        return user.create(seed);
+      }),
     );
-    const usersByUsername = new Map(users.map((user) => [user.username, user]));
+    const usersByUsername = new Map(users.map((seededUser) => [seededUser.username, seededUser]));
 
-    await Promise.all([
-      TeamModel.updateOne(
-        { _id: teams[0]._id },
-        { $set: { members: [usersByUsername.get('alex-morgan')!._id, usersByUsername.get('jordan-lee')!._id] } },
-      ).exec(),
-      TeamModel.updateOne(
-        { _id: teams[1]._id },
-        { $set: { members: [usersByUsername.get('casey-rivera')!._id, usersByUsername.get('taylor-kim')!._id] } },
-      ).exec(),
-    ]);
+    function getSeededUser(username: string) {
+      const seededUser = usersByUsername.get(username);
+      if (!seededUser) {
+        throw new Error(`Seed user not found: ${username}`);
+      }
+      return seededUser;
+    }
+
+    teams[0].members = [getSeededUser('alex-morgan')._id, getSeededUser('jordan-lee')._id];
+    teams[1].members = [getSeededUser('casey-rivera')._id, getSeededUser('taylor-kim')._id];
+    await Promise.all(teams.map((seededTeam) => seededTeam.save()));
 
     const leaderboardSeeds = [...userSeeds].sort((first, second) => second.points - first.points);
     await Promise.all(
-      leaderboardSeeds.map(({ username, points }, index) =>
-        LeaderboardModel.findOneAndUpdate(
-          { user: usersByUsername.get(username)!._id },
-          { $set: { points, rank: index + 1 } },
-          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-        ).exec(),
-      ),
+      leaderboardSeeds.map(async ({ username, points }, index) => {
+        const existingEntry = await leaderboard.findOne({ user: getSeededUser(username)._id }).exec();
+        const entry = { user: getSeededUser(username)._id, points, rank: index + 1 };
+        if (existingEntry) {
+          existingEntry.set({ points, rank: index + 1 });
+          return existingEntry.save();
+        }
+        return leaderboard.create(entry);
+      }),
     );
 
-    const seededUserIds = users.map((user) => user._id);
-    await ActivityModel.deleteMany({ user: { $in: seededUserIds } }).exec();
+    const seededUserIds = users.map((seededUser) => seededUser._id);
+    await activity.deleteMany({ user: { $in: seededUserIds } }).exec();
     const activitySeeds = [
       { username: 'alex-morgan', activityType: 'running', durationMinutes: 42, distanceKm: 7.2, calories: 510, daysAgo: 1 },
       { username: 'alex-morgan', activityType: 'strength', durationMinutes: 35, distanceKm: 0, calories: 240, daysAgo: 3 },
@@ -81,10 +94,10 @@ async function seedDatabase() {
       { username: 'taylor-kim', activityType: 'cycling', durationMinutes: 36, distanceKm: 11.2, calories: 390, daysAgo: 5 },
     ] as const;
     const now = Date.now();
-    await ActivityModel.insertMany(
-      activitySeeds.map(({ username, daysAgo, ...activity }) => ({
-        ...activity,
-        user: usersByUsername.get(username)!._id,
+    await activity.insertMany(
+      activitySeeds.map(({ username, daysAgo, ...seed }) => ({
+        ...seed,
+        user: getSeededUser(username)._id,
         createdAt: new Date(now - daysAgo * 24 * 60 * 60 * 1000),
       })),
     );
@@ -96,13 +109,14 @@ async function seedDatabase() {
       { title: 'Technique Swim', description: 'Practice efficient freestyle form with short recovery breaks.', activityType: 'swimming', durationMinutes: 25, difficulty: 'beginner' },
     ] as const;
     await Promise.all(
-      workoutSeeds.map(({ title, ...workout }) =>
-        WorkoutModel.findOneAndUpdate(
-          { title },
-          { $set: workout },
-          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-        ).exec(),
-      ),
+      workoutSeeds.map(async ({ title, ...seed }) => {
+        const existingWorkout = await workout.findOne({ title }).exec();
+        if (existingWorkout) {
+          existingWorkout.set(seed);
+          return existingWorkout.save();
+        }
+        return workout.create({ title, ...seed });
+      }),
     );
 
     console.log('Database seeding complete');
